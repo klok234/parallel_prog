@@ -2,8 +2,8 @@ import numpy as np
 
 
 def generate_matrix():
-    sizes = [500]
-    np.random.seed(42)
+    sizes = [200, 500, 800, 1000, 1500, 2000, 2500]
+    np.random.seed(67)
 
     for n in sizes:
         A = np.random.randint(-100, 101, size=(n, n))
