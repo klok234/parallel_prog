@@ -5,6 +5,7 @@
 #include <exception>
 #include <fstream>
 #include <chrono>
+#include <omp.h>
 
 using namespace std;
 
@@ -88,12 +89,13 @@ public:
         }
         else
         {
-            for (size_t i = 0; i < _rows; i++)
+            #pragma omp parallel for collapse(2) schedule(dynamic)
+            for (int i = 0; i < _rows; i++)
             {
-                for (size_t j = 0; j < rhs._cols; j++)
+                for (int j = 0; j < rhs._cols; j++)
                 {
                     T sum = 0;
-                    for (size_t k = 0; k < _cols; k++)
+                    for (int k = 0; k < _cols; k++)
                     {
                         sum += this->operator()(i, k) * rhs(k, j);
                     }
@@ -150,12 +152,13 @@ stats<T> multiply_matrix(Matrix<T>& a, Matrix<T>& b)
         throw std::invalid_argument("Matrix must be N*N!");
     }
     stats<T> res;
+    cout << "Start multiply\n";
     auto start = chrono::high_resolution_clock::now();
 
     res.matrix = a * b;
 
     auto stop = chrono::high_resolution_clock::now();
-    
+    cout << "Finish multiply\n";
     res.duration = chrono::duration_cast<chrono::milliseconds>(stop - start);
 #ifdef CHECK_RES
     res.is_correct = compare_matrix(a, b, res.matrix);
@@ -167,6 +170,7 @@ template <class T>
 bool compare_matrix(Matrix<T>& a, Matrix<T>& b, Matrix<T>& res)
 {
     ofstream fout;
+    cout << "Cheking result\n";
     fout.open("to_cmp.txt");
 
     fout << a.cols() << "\n";
