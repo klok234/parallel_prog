@@ -5,6 +5,7 @@
 #include <exception>
 #include <fstream>
 #include <chrono>
+#include <omp.h>
 
 using namespace std;
 
@@ -88,6 +89,7 @@ public:
         }
         else
         {
+            #pragma omp parallel for collapse(2) schedule(dynamic)
             for (int i = 0; i < _rows; i++)
             {
                 for (int j = 0; j < rhs._cols; j++)
