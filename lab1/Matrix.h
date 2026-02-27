@@ -132,6 +132,21 @@ struct stats
     Matrix<T> matrix;
     std::chrono::milliseconds duration = 0ms;
     bool is_correct = false;
+
+    void to_plot()
+    {
+        ofstream fout;
+        fout.open("to_plot.txt", ios::app);
+
+        if (!fout.is_open())
+        {
+            throw std::exception("Failed to save result");
+        }
+        fout << matrix.cols() << " " << duration.count() << "\n";
+
+        fout.close();
+    }
+
 };
 
 template <class T>

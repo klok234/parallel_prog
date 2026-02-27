@@ -40,7 +40,11 @@ int main()
         }
         Matrix<int> b(n, n, tmp);
 
-        fout << multiply_matrix(a, b);
+        stats<int> res = multiply_matrix(a, b);
+
+        fout << res;
+
+        res.to_plot();
 
         delete[] tmp;
 
