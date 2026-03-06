@@ -39,10 +39,6 @@ public:
     Matrix(size_t rows, size_t cols) : _rows(rows), _cols(cols)
     {
         _value = new T[_rows * _cols](0);
-        //for (size_t i = 0; i < _rows * _cols; i++)
-        //{
-        //    _value[i] = 0;
-        //}
     }
 
     size_t rows() const
@@ -89,7 +85,6 @@ public:
         }
         else
         {
-            #pragma omp parallel for collapse(2) schedule(dynamic)
             for (int i = 0; i < _rows; i++)
             {
                 for (int j = 0; j < rhs._cols; j++)
@@ -131,6 +126,7 @@ struct stats
 {
     Matrix<T> matrix;
     std::chrono::milliseconds duration = 0ms;
+    int threads = 1;
     bool is_correct = false;
 
     void to_plot()
@@ -142,7 +138,7 @@ struct stats
         {
             throw std::exception("Failed to save result");
         }
-        fout << matrix.cols() << " " << duration.count() << "\n";
+        fout << matrix.cols() << " " << duration.count() << " " << threads << "\n";
 
         fout.close();
     }
@@ -152,15 +148,18 @@ struct stats
 template <class T>
 std::ostream& operator<<(std::ostream& os, const stats<T>& s)
 {
+#ifdef SAVE_MATRIX
     os << s.matrix;
+#endif
     os << "Duration: " << s.duration << "\n";
+    os << "Threads: " << s.threads << "\n";
     os << "Correct: " << s.is_correct << "\n";
     os << "Count of matrix elements: " << s.matrix.rows() * s.matrix.cols() << "\n\n";
     return os;
 }
 
 template <class T>
-stats<T> multiply_matrix(Matrix<T>& a, Matrix<T>& b)
+stats<T> multiply_matrix(Matrix<T>& a, Matrix<T>& b, int threads)
 {
     if (a.cols() != b.cols() && a.rows() != a.cols() && b.rows() != b.cols())
     {
@@ -170,9 +169,23 @@ stats<T> multiply_matrix(Matrix<T>& a, Matrix<T>& b)
     cout << "Start multiply\n";
     auto start = chrono::high_resolution_clock::now();
 
-    res.matrix = a * b;
-
+    Matrix<T> result(a.rows(), a.cols());
+    #pragma omp parallel for collapse(2) num_threads(threads)
+    for (int i = 0; i < a.rows(); i++)
+    {
+        for (int j = 0; j < b.cols(); j++)
+        {
+            T sum = 0;
+            for (int k = 0; k < a.cols(); k++)
+            {
+                sum += a(i, k) * b(k, j);
+            }
+            result(i, j) = sum;
+        }
+    }
     auto stop = chrono::high_resolution_clock::now();
+    res.matrix = result;
+    res.threads = threads;
     cout << "Finish multiply\n";
     res.duration = chrono::duration_cast<chrono::milliseconds>(stop - start);
 #ifdef CHECK_RES

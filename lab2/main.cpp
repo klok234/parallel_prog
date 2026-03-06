@@ -1,4 +1,5 @@
 ﻿#define CHECK_RES
+// #define SAVE_MATRIX // For saving result matirx in file
 
 #include <iostream>
 #include "Matrix.h"
@@ -7,7 +8,7 @@ using namespace std;
 
 int main()
 {
-    cout << "Lab1: by Dolzhikov D.A. 6212-100503D\n\n";
+    cout << "Lab2: by Dolzhikov D.A. 6212-100503D\n\n";
     ifstream fin;
     fin.open("input.txt");
 
@@ -17,8 +18,15 @@ int main()
     }
 
     ofstream fout;
+    fout.open("to_plot.txt");
+    fout.close();
+
+
     fout.open("output.txt");
     cout << "Starting successful\n";
+
+    vector<int> threads = {1, 2, 4, 8 };
+
     while (!fin.eof())
     {
         cout << "Working...\n";
@@ -39,12 +47,14 @@ int main()
             fin >> tmp[i];
         }
         Matrix<int> b(n, n, tmp);
+        for (auto& th : threads)
+        {
+            stats<int> res = multiply_matrix(a, b, th);
 
-        stats<int> res = multiply_matrix(a, b);
+            fout << res;
 
-        fout << res;
-
-        res.to_plot();
+            res.to_plot();
+        }
 
         delete[] tmp;
 
