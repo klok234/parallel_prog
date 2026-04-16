@@ -1,67 +1,14 @@
 ﻿#ifndef MATRIX
 #define MATRIX
 
+#include <mpi.h>
 #include <iostream>
 #include <exception>
+#include <stdexcept>
 #include <fstream>
 #include <chrono>
-#include <cuda_runtime.h>
-
 
 using namespace std;
-
-
-template <typename T>
-__global__ void matmul_kernel_shared(const T* A, const T* B, T* C, size_t N)
-{
-    extern __shared__ T shared_mem[];
-    T* sA = shared_mem;
-    T* sB = &shared_mem[blockDim.x * blockDim.y];
-
-    int bx = blockIdx.x, by = blockIdx.y;
-    int tx = threadIdx.x, ty = threadIdx.y;
-
-    int row = by * blockDim.y + ty;
-    int col = bx * blockDim.x + tx;
-
-    T sum = 0;
-    for (int tile = 0; tile < (N + blockDim.x - 1) / blockDim.x; ++tile)
-    {
-        if (row < N && tile * blockDim.x + tx < N)
-            sA[ty * blockDim.x + tx] = A[row * N + tile * blockDim.x + tx];
-        else
-            sA[ty * blockDim.x + tx] = 0;
-
-        if (col < N && tile * blockDim.y + ty < N)
-            sB[ty * blockDim.x + tx] = B[(tile * blockDim.y + ty) * N + col];
-        else
-            sB[ty * blockDim.x + tx] = 0;
-
-        __syncthreads();
-
-        for (int k = 0; k < blockDim.x; ++k)
-            sum += sA[ty * blockDim.x + k] * sB[k * blockDim.x + tx];
-
-        __syncthreads();
-    }
-
-    if (row < N && col < N)
-        C[row * N + col] = sum;
-}
-
-template <typename T>
-__global__ void matmul_kernel_naive(const T* A, const T* B, T* C, size_t N)
-{
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-    if (row < N && col < N)
-    {
-        T sum = 0;
-        for (int k = 0; k < N; ++k)
-            sum += A[row * N + k] * B[k * N + col];
-        C[row * N + col] = sum;
-    }
-}
 
 template <class T>
 class Matrix {
@@ -75,8 +22,8 @@ public:
     {
         _rows = other._rows;
         _cols = other._cols;
-        _value = new T[_rows*_cols];
-        for (size_t i = 0; i < _rows*_cols; i++)
+        _value = new T[_rows * _cols];
+        for (size_t i = 0; i < _rows * _cols; i++)
         {
             _value[i] = other._value[i];
         }
@@ -84,15 +31,15 @@ public:
 
     Matrix(size_t rows, size_t cols, T* values) : _rows(rows), _cols(cols)
     {
-        _value = new T[_rows*_cols];
-        for (size_t i = 0; i < _rows*_cols; i++)
+        _value = new T[_rows * _cols];
+        for (size_t i = 0; i < _rows * _cols; i++)
         {
             _value[i] = values[i];
         }
     }
     Matrix(size_t rows, size_t cols) : _rows(rows), _cols(cols)
     {
-        _value = new T[_rows * _cols](0);
+        _value = new T[_rows * _cols]();
     }
 
     size_t rows() const
@@ -106,11 +53,11 @@ public:
 
     T operator()(const size_t rows, const size_t cols) const
     {
-        if (rows >= _rows  || cols >= _cols)
+        if (rows >= _rows || cols >= _cols)
         {
             throw std::range_error("Index out of range");
         }
-        return _value[rows*_cols + cols];
+        return _value[rows * _cols + cols];
     }
     T& operator()(const size_t rows, const size_t cols)
     {
@@ -119,6 +66,11 @@ public:
             throw std::range_error("Index out of range");
         }
         return _value[rows * _cols + cols];
+    }
+
+    T* data()
+    {
+        return _value;
     }
 
     Matrix<T>& operator=(const Matrix<T>& rhs)
@@ -154,7 +106,6 @@ public:
         }
         return result;
     }
-
     ~Matrix()
     {
         delete[] _value;
@@ -179,31 +130,24 @@ template <class T>
 struct stats
 {
     Matrix<T> matrix;
-    std::chrono::microseconds duration = 0us;
+    std::chrono::milliseconds duration = std::chrono::milliseconds(0);
+    int threads = 1;
     bool is_correct = false;
-    dim3 grid_size;
-    dim3 block_size;
-    bool used_shared_mem = false;
 
     void to_plot()
     {
-        ofstream fout("to_plot.txt", ios::app);
-        if (!fout.is_open()) throw std::exception("Failed to save result");
-        fout << matrix.cols() << " " << duration.count() << " "
-            << block_size.x << "x" << block_size.y << " "
-            << (used_shared_mem ? "shared" : "naive") << "\n";
+        ofstream fout;
+        fout.open("to_plot.txt", ios::app);
+
+        if (!fout.is_open())
+        {
+            throw std::runtime_error("Failed to save result");
+        }
+        fout << matrix.cols() << " " << duration.count() << " " << threads << "\n";
+
         fout.close();
     }
 
-    void to_csv(const string& filename = "experiments.csv")
-    {
-        ofstream fout(filename, ios::app);
-        if (!fout.is_open()) return;
-        fout << matrix.rows() << "," << duration.count() << ","
-            << block_size.x << "x" << block_size.y << ","
-            << used_shared_mem << "\n";
-        fout.close();
-    }
 };
 
 template <class T>
@@ -212,80 +156,148 @@ std::ostream& operator<<(std::ostream& os, const stats<T>& s)
 #ifdef SAVE_MATRIX
     os << s.matrix;
 #endif
-    os << "Duration: " << s.duration.count() << " us\n";
-    os << "Grid: (" << s.grid_size.x << "," << s.grid_size.y
-        << ")  Block: (" << s.block_size.x << "," << s.block_size.y << ")\n";
-    os << "Shared memory used: " << (s.used_shared_mem ? "yes" : "no") << "\n";
+    os << "Duration: " << s.duration.count() << "ms\n";
+    os << "Threads: " << s.threads << "\n";
     os << "Correct: " << s.is_correct << "\n";
     os << "Count of matrix elements: " << s.matrix.rows() * s.matrix.cols() << "\n\n";
     return os;
 }
 
-template <typename T>
-stats<T> multiply_matrix_cuda(const Matrix<T>& a, const Matrix<T>& b,
-    dim3 block_size = dim3(16, 16),
-    bool use_shared_mem = true)
+template <class T>
+stats<T> multiply_matrix(Matrix<T>& a, Matrix<T>& b)
 {
-    if (a.cols() != b.rows() || a.rows() != a.cols() || b.rows() != b.cols())
-        throw std::invalid_argument("Only square matrices");
 
-    size_t N = a.rows();
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    if (a.cols() != b.cols() && a.rows() != a.cols() && b.rows() != b.cols())
+    {
+        throw std::invalid_argument("Matrix must be N*N!");
+    }
+
     stats<T> res;
-    res.block_size = block_size;
-    res.used_shared_mem = use_shared_mem;
-
-    dim3 grid_size((N + block_size.x - 1) / block_size.x,
-        (N + block_size.y - 1) / block_size.y);
-    res.grid_size = grid_size;
-
-    T* d_A = nullptr, * d_B = nullptr, * d_C = nullptr;
-    size_t bytes = N * N * sizeof(T);
-
-    cudaMalloc(&d_A, bytes);
-    cudaMalloc(&d_B, bytes);
-    cudaMalloc(&d_C, bytes);
-
-    cudaMemcpy(d_A, a.data(), bytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, b.data(), bytes, cudaMemcpyHostToDevice);
+    if (rank == 0) std::cout << "Start multiply with " << size << " processes\n";
+    MPI_Barrier(MPI_COMM_WORLD);
 
     auto start = chrono::high_resolution_clock::now();
 
-    if (use_shared_mem)
+    int rows_per_proc = a.rows() / size;
+    int remainder = a.rows() % size;
+    int start_row, end_row;
+
+
+    if (rank < remainder) {
+        start_row = rank * (rows_per_proc + 1);
+        end_row = start_row + rows_per_proc + 1;
+    }
+    else {
+        start_row = rank * rows_per_proc + remainder;
+        end_row = start_row + rows_per_proc;
+    }
+
+    int loc_rows = end_row - start_row;
+    Matrix<T> loc_result(loc_rows, a.cols());
+
+
+    for (int i = 0; i < loc_rows; i++)
     {
-        size_t shared_size = block_size.x * block_size.y * 2 * sizeof(T);
-        matmul_kernel_shared<T> << <grid_size, block_size, shared_size >> > (d_A, d_B, d_C, N);
+        int global_i = start_row + i;
+        for (int j = 0; j < b.cols(); j++)
+        {
+            T sum = 0;
+            for (int k = 0; k < a.cols(); k++)
+            {
+                sum += a(global_i, k) * b(k, j);
+            }
+            loc_result(i, j) = sum;
+        }
+    }
+    Matrix<T> full_result;
+    if (rank == 0) full_result = Matrix<T>(a.rows(), b.cols());
+
+    int* recvcounts = nullptr, * displs = nullptr;
+    if (rank == 0) {
+        recvcounts = new int[size];
+        displs = new int[size];
+        int offset = 0;
+        for (int p = 0; p < size; ++p) {
+            int p_rows = (p < remainder) ? rows_per_proc + 1 : rows_per_proc;
+            recvcounts[p] = p_rows * b.cols();
+            displs[p] = offset;
+            offset += recvcounts[p];
+        }
+    }
+
+    MPI_Gatherv(loc_result.data(), loc_rows * b.cols(), MPI_INT,
+        (rank == 0) ? full_result.data() : nullptr,
+        recvcounts, displs, MPI_INT, 0, MPI_COMM_WORLD);
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    auto stop = chrono::high_resolution_clock::now();
+    if (rank == 0) {
+        res.matrix = full_result;
+        res.threads = size;
+        std::cout << "Finish multiply\n";
+        res.duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
+#ifdef CHECK_RES
+        res.is_correct = compare_matrix(a, b, res.matrix);
+#endif
+        delete[] recvcounts;
+        delete[] displs;
+    }
+    return res;
+}
+
+template <class T>
+bool compare_matrix(Matrix<T>& a, Matrix<T>& b, Matrix<T>& res)
+{
+    ofstream fout;
+    cout << "Cheking result\n";
+    fout.open("to_cmp.txt");
+
+    fout << a.cols() << "\n";
+    for (size_t i = 0; i < a.rows(); i++)
+    {
+        for (size_t j = 0; j < a.cols(); j++)
+        {
+            fout << a(i, j) << " ";
+        }
+        fout << "\n";
+    }
+    for (size_t i = 0; i < b.rows(); i++)
+    {
+        for (size_t j = 0; j < b.cols(); j++)
+        {
+            fout << b(i, j) << " ";
+        }
+        fout << "\n";
+    }
+    for (size_t i = 0; i < res.rows(); i++)
+    {
+        for (size_t j = 0; j < res.cols(); j++)
+        {
+            fout << res(i, j) << " ";
+        }
+        fout << "\n";
+    }
+
+    fout.close();
+    int code = system("python cheker.py to_cmp.txt");
+
+    if (code == 0)
+    {
+        return true;
+    }
+    if (code == 1)
+    {
+        return false;
     }
     else
     {
-        matmul_kernel_naive<T> << <grid_size, block_size >> > (d_A, d_B, d_C, N);
+        throw std::runtime_error("Something went wrong");
     }
-    cudaDeviceSynchronize();
-
-    Matrix<T> result(N, N);
-    cudaMemcpy(result.data(), d_C, bytes, cudaMemcpyDeviceToHost);
-
-    auto stop = chrono::high_resolution_clock::now();
-    res.duration = chrono::duration_cast<chrono::microseconds>(stop - start);
-    res.matrix = result;
-
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
-
-#ifdef CHECK_RES
-    cout << "Checking result with CPU multiplication...\n";
-    Matrix<T> cpu_res = a.mul_cpu(b);
-    bool ok = true;
-    for (size_t i = 0; i < N && ok; ++i)
-        for (size_t j = 0; j < N; ++j)
-            if (abs(cpu_res(i, j) - result(i, j)) > 1e-5)
-            {
-                ok = false; break;
-            }
-    res.is_correct = ok;
-#endif
-
-    return res;
 }
+
 
 #endif
